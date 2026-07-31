@@ -88,3 +88,43 @@ test('PUBLIC_METADATA_KEYS excludes admin + secret keys', () => {
 	assert.ok(PUBLIC_METADATA_KEYS.includes('ip'));
 	assert.ok(PUBLIC_METADATA_KEYS.includes('sshPort'));
 });
+// Regression: the admin UI writes these keys on every save, but they were never
+// declared in METADATA_KEYS -- so the non-admin allowlist silently dropped all
+// of them. That blanked OS/port in the end-user portal and, because service
+// tokens are never directory admins, left the firewall consumer unable to read
+// the port mapping it exists to render.
+test('connection + display keys survive the non-admin projection', () => {
+	const r = { id: 'h1', kind: 'service', metadata: {
+		port: 8080, externalPort: 443, isExternalReachable: true,
+		os: 'Debian 12', gitRepo: 'https://example.invalid/r', isCurrentSite: true,
+	}};
+	const out = projectResource(r, { fullMetadata: false }).metadata;
+	assert.deepEqual(out, r.metadata, 'none of these may be stripped from a normal caller');
+});
+
+test('operator-detail keys are admin-only', () => {
+	const r = { id: 'h1', kind: 'host', metadata: {
+		ip: '10.0.0.5', vmid: 101, macAddress: 'aa:bb:cc:dd:ee:ff',
+		installPath: '/opt/app', systemdService: 'app.service',
+	}};
+	const pub = projectResource(r, { fullMetadata: false }).metadata;
+	assert.deepEqual(pub, { ip: '10.0.0.5' });
+
+	const adm = projectResource(r, { fullMetadata: true }).metadata;
+	assert.deepEqual(adm, r.metadata, 'admins still see operator detail');
+});
+
+test('a service token reads what the firewall consumer needs', () => {
+	// isMachine => never an admin => non-admin projection. This is the exact
+	// call path routes/discovery.js takes for a ServiceToken caller.
+	const user = { isMachine: true, groups: [] };
+	const r = { id: 's1', kind: 'service', metadata: {
+		ip: '10.0.0.5', port: 8080, externalPort: 443, isExternalReachable: true,
+		client_secret_hash: '$2b$nope',
+	}};
+	const out = projectResource(r, { fullMetadata: isDirectoryAdmin(user) }).metadata;
+	assert.equal(out.port, 8080);
+	assert.equal(out.externalPort, 443);
+	assert.equal(out.isExternalReachable, true);
+	assert.equal(out.client_secret_hash, undefined, 'secret never leaves, machine or not');
+});
