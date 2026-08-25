@@ -128,3 +128,80 @@ test('a service token reads what the firewall consumer needs', () => {
 	assert.equal(out.isExternalReachable, true);
 	assert.equal(out.client_secret_hash, undefined, 'secret never leaves, machine or not');
 });
+
+// Regression: jump-host's `isCatalogHost` could not see what it keys on.
+//
+// It excludes resources the SSO merely *discovered* and nobody promoted, by
+// reading `managed` and `discovery_sources`. Neither was declared in
+// METADATA_KEYS, so the non-admin allowlist dropped both -- and jump-host is a
+// machine caller, which isDirectoryAdmin() never treats as an admin. Every
+// resource arrived with neither field, `autoDiscovered` computed false, and the
+// filter returned true for everything it was asked about.
+test('catalog membership keys survive the non-admin projection', () => {
+	const r = { id: 'h1', kind: 'host', metadata: {
+		ip: '10.0.0.5', managed: true, discovery_sources: ['proxmox-718'],
+	}};
+	const out = projectResource(r, { fullMetadata: false }).metadata;
+	assert.equal(out.managed, true, 'the catalog flag must reach a non-admin caller');
+	assert.deepEqual(out.discovery_sources, ['proxmox-718'], 'the other half of the same rule must too');
+});
+
+test('a machine caller can apply the catalog rule end to end', () => {
+	// The exact predicate jump-host applies (utils/access.js isCatalogHost),
+	// run over the projection a machine caller actually receives.
+	const isCatalogHost = (r) => {
+		if (!r || r.kind !== 'host') return false;
+		const meta = r.metadata || {};
+		if (meta.managed === true) return true;
+		if (meta.managed === false) return false;
+		const sources = meta.discovery_sources || [];
+		return !(sources.length > 0 && !sources.includes('manual'));
+	};
+	const machine = { isMachine: true, groups: [] };
+	const project = (r) => projectResource(r, { fullMetadata: isDirectoryAdmin(machine) });
+
+	const promoted = { id: 'a', kind: 'host', metadata: { managed: true, discovery_sources: ['proxmox-718'] } };
+	const unpromoted = { id: 'b', kind: 'host', metadata: { discovery_sources: ['proxmox-718'] } };
+	const handMade = { id: 'c', kind: 'host', metadata: {} };
+	const excluded = { id: 'd', kind: 'host', metadata: { managed: false, discovery_sources: ['unifi'] } };
+
+	assert.equal(isCatalogHost(project(promoted)), true);
+	assert.equal(isCatalogHost(project(unpromoted)), false, 'this is the case that used to pass');
+	assert.equal(isCatalogHost(project(handMade)), true);
+	assert.equal(isCatalogHost(project(excluded)), false);
+});
+
+test('reconciler bindings stay admin-only', () => {
+	// agentId in particular: it is a binding record, not a live-enrolment
+	// signal, and it must not become something a non-admin caller can reason
+	// about.
+	const r = { id: 'h1', kind: 'host', metadata: {
+		ip: '10.0.0.5', managed: true,
+		agentId: 'agent-1', hostId: 'h0', sourceId: 'pve/101', last_seen: 1787000000000,
+		interfaces: [{ name: 'eth0' }], node: 'pve-node-0', public_ip: '203.0.113.9',
+	}};
+	const pub = projectResource(r, { fullMetadata: false }).metadata;
+	assert.deepEqual(pub, { ip: '10.0.0.5', managed: true });
+
+	const adm = projectResource(r, { fullMetadata: true }).metadata;
+	assert.deepEqual(adm, r.metadata, 'admins still see the bindings');
+});
+
+// METADATA_KEYS is meant to be a complete map of the contract. It has now been
+// incomplete twice (v1.1.0, v1.2.0), and both times the symptom looked like a
+// logic error at the consumer rather than a schema omission. This holds the
+// keys the theta-suite reconcilers and discovery plugins actually write.
+test('every metadata key the suite writes is declared', () => {
+	const { METADATA_KEYS } = require('..');
+	const written = [
+		'ip', 'address', 'subType', 'isProduction', 'isPublic', 'requestable',
+		'managed', 'discovery_sources', 'last_seen', 'sourceId', 'node',
+		'macAddress', 'interfaces', 'vmid', 'os', 'kernel', 'cpu',
+		'ram_total_gb', 'disk_total_gb', 'public_ip', 'agentId', 'hostId',
+		'serviceName', 'systemdService', 'dockerContainer', 'installPath',
+		'port', 'externalPort', 'isExternalReachable', 'isCurrentSite',
+		'icon', 'tagline', 'gitRepo', 'sshPort', 'portMappings', 'status',
+	];
+	const missing = written.filter(k => !(k in METADATA_KEYS));
+	assert.deepEqual(missing, [], `undeclared keys are invisible to every non-admin caller: ${missing.join(', ')}`);
+});

@@ -2,6 +2,25 @@
 
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-08-25
+
+The same failure as v1.1.0, one layer over: keys that consumers read, that the
+projection was silently dropping because nobody had declared them.
+
+### Fixed
+- **jump-host's catalog filter could not see what it keys on.** `isCatalogHost` excludes resources the SSO merely *discovered* and nobody promoted, by reading `managed` and `discovery_sources`. Neither was declared in `METADATA_KEYS`, so `projectResource(..., {fullMetadata: false})` dropped both — and jump-host is a machine caller, which `isDirectoryAdmin()` never treats as an admin. Every resource therefore arrived with neither field, `autoDiscovered` computed `false`, and the filter returned `true` for everything it was asked about.
+
+  Two consequences in theta-suite: `allHosts()` — the admin host view — listed unpromoted discovery output (Proxmox guests, UniFi clients) as though it were catalog content, which is the exact bug jump-host v3.3.0 believed it had fixed. `accessibleHosts()` escaped only because the SSO applies the same rule server-side before answering, so the client-side filter had nothing left to catch.
+
+### Added
+- Public keys: `managed`, `discovery_sources`. Neither is sensitive — `managed` says an operator put the resource in the catalog, `discovery_sources` names the plugin that found it — and both are only ever returned for resources the caller can already reach.
+- Admin-only keys, so `METADATA_KEYS` is a complete map of the contract rather than a partial one: `serviceName`, `dockerContainer`, `kernel`, `cpu`, `ram_total_gb`, `disk_total_gb`, `public_ip`, `interfaces`, `node`, `status`, `agentId`, `hostId`, `sourceId`, `last_seen`. **No behaviour change** — the admin path already passed these through and the non-admin path already dropped them. They are declared because a key nobody thought to declare is invisible to every non-admin caller, and the failure looks like a logic error at the consumer.
+- `agentId`'s description records that it is a binding record and **not** proof the enrolment is still live: it survives revocation, so anything gating access on an agent must check the agent, not the field.
+- Regression tests: the catalog keys survive a non-admin projection; jump-host's exact predicate, run over the projection a machine caller actually receives, now excludes unpromoted discovery output (the case that used to pass); the reconciler bindings stay admin-only; and a completeness test holding `METADATA_KEYS` to the keys the theta-suite reconcilers and discovery plugins write, so the next omission fails the suite instead of going quiet in production.
+
+### Changed
+- README: "Declaring a new secret field" is now "Declaring a new metadata key", with the flag table and the rule that **every** key must be declared, admin-only ones included.
+
 ## [1.1.0] — 2026-07-30
 
 Declares the metadata keys sso-manager-node's admin UI was already writing but

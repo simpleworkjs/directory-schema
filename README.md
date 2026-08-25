@@ -48,9 +48,21 @@ const directory = createDirectoryClient({
 const hosts = await directory.getResourcesByGroup('host_web01_access', { kind: 'host' });
 ```
 
-## Declaring a new secret field
+## Declaring a new metadata key
 
-Add it to `METADATA_KEYS` in `lib/schema.js` with `secret: true`. The projection strips it in both the admin and non-admin paths. Unknown keys matching `/secret|password|privatekey/i` are also stripped as defense in depth.
+**Every metadata key must be declared in `METADATA_KEYS` (`lib/schema.js`), including admin-only ones.**
+
+An undeclared key is not "unspecified" — it is *invisible to every non-admin caller*, because the non-admin path keeps only the declared public allowlist. And `isDirectoryAdmin()` is false for `isMachine`, so that includes every service token and every machine consumer.
+
+This has now bitten twice (v1.1.0, v1.2.0), and both times the symptom looked like a logic error at the consumer rather than a schema omission: a blank field in the portal, a firewall rule with no port, a filter that silently matched everything. `test/projection.test.js` holds the list of keys the theta-suite reconcilers write, so a new one fails the suite rather than going quiet in production.
+
+| flag | who sees it | when to use it |
+| :--- | :--- | :--- |
+| *(none)* | everyone, including machines | the caller needs it to reach, render, or reason about the resource |
+| `admin: true` | directory admins only | infra internals with no consumer outside the admin UI |
+| `secret: true` | **nobody** — stripped in both paths | credentials and hashes. Unknown keys matching `/secret\|password\|privatekey/i` are also stripped as defense in depth |
+
+`admin: true` changes no behaviour on its own — the admin path already passes through anything not secret-named, and the non-admin path already dropped anything undeclared. Declare it anyway: the point is that `METADATA_KEYS` is a complete map of the contract, so the next person can see what exists and decide, rather than discovering a key by its absence.
 
 ## License
 
