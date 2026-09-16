@@ -25,6 +25,8 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  # So an auth problem can be diagnosed without burning a version number.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -48,10 +50,21 @@ jobs:
       # which reads like a missing package, not an auth failure, on a package
       # that plainly exists. This is the exact shape npm's own documented
       # workflow avoids; it pins v6 and disables the package-manager cache.
+      # NO registry-url, deliberately.
+      #
+      # setup-node writes an .npmrc containing `_authToken=${NODE_AUTH_TOKEN}`
+      # whenever registry-url is given, and sets NODE_AUTH_TOKEN to the literal
+      # placeholder `XXXXX-XXXXX-XXXXX-XXXXX` when no token is supplied --
+      # confirmed on both v4 and v6. npm then has a credential, uses it rather
+      # than falling back to OIDC, and the registry rejects the garbage as
+      # `E404 ... PUT` on a package that plainly exists.
+      #
+      # registry.npmjs.org is npm's default registry, so dropping this input
+      # costs nothing and leaves npm with no configured credential -- which is
+      # the state its OIDC detection needs.
       - uses: actions/setup-node@v6
         with:
           node-version: 24.x
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Ensure npm supports trusted publishing
@@ -66,4 +79,9 @@ jobs:
         run: npm test
 
       - name: Publish
-        run: npm publish --access public
+        # --loglevel verbose so an auth failure says which mechanism was tried,
+        # rather than the bare E404 that reads like a missing package.
+        run: |
+          echo "npm: $(npm --version)"
+          echo "configured authToken: [$(npm config get //registry.npmjs.org/:_authToken 2>/dev/null)]"
+          npm publish --access public --loglevel verbose
