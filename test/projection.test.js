@@ -201,7 +201,67 @@ test('every metadata key the suite writes is declared', () => {
 		'serviceName', 'systemdService', 'dockerContainer', 'installPath',
 		'port', 'externalPort', 'isExternalReachable', 'isCurrentSite',
 		'icon', 'tagline', 'gitRepo', 'sshPort', 'portMappings', 'status',
+		// v1.3.0: the catalog + http endpoint shape, and the derived status
+		// fields that were being written and never declared.
+		'catalog', 'isHTTPS', 'externalIsHTTPS', 'healthPath',
+		'status_message', 'bubbled_status', 'bubbled_status_from',
+		'bubbled_environment', 'bubbled_tags', 'environment', 'tags',
 	];
 	const missing = written.filter(k => !(k in METADATA_KEYS));
 	assert.deepEqual(missing, [], `undeclared keys are invisible to every non-admin caller: ${missing.join(', ')}`);
+});
+
+// The catalog is rendered for ordinary users, so every field its cards read
+// must survive the non-admin projection. A catalog that works for the admin
+// who built it and is blank for everyone else is the failure mode this whole
+// file exists to prevent.
+test('a non-admin receives everything a catalog card renders', () => {
+	const entry = { id: 's1', kind: 'service', name: 'Emby', metadata: {
+		subType: 'http', catalog: true, managed: true,
+		icon: 'fa-solid fa-film', tagline: 'Movies and TV',
+		description: 'The media server.',
+		isHTTPS: true, address: '192.168.1.206', port: 8096,
+		externalIsHTTPS: true, fqdn: 'emby.example.com', externalPort: 443,
+		healthPath: '/health', isPublic: false, requestable: true,
+		status: 'ok',
+	}};
+	const pub = projectResource(entry, { fullMetadata: false }).metadata;
+	for (const k of ['catalog', 'icon', 'tagline', 'description', 'subType',
+	                 'isHTTPS', 'address', 'port', 'externalIsHTTPS', 'fqdn',
+	                 'externalPort', 'healthPath', 'isPublic', 'requestable',
+	                 'status']) {
+		assert.ok(k in pub, `${k} is dropped for non-admins -- the card cannot render it`);
+	}
+});
+
+// The split that makes `status` safe to publish: the coarse enum goes out, and
+// everything derived from the subtree does not. bubbled_* summarises children
+// the caller may have no access to, which would turn the catalog into an
+// inference channel over exactly the rows the projection is hiding.
+test('status is public but its derived fields are not', () => {
+	const r = { id: 'h1', kind: 'host', metadata: {
+		status: 'warning',
+		status_message: 'Last poll failed',
+		bubbled_status: 'critical',
+		bubbled_status_from: 'dl380-0',
+		bubbled_environment: 'prod',
+		bubbled_tags: ['pci'],
+		environment: 'prod',
+		tags: ['pci'],
+	}};
+	const pub = projectResource(r, { fullMetadata: false }).metadata;
+	assert.deepEqual(pub, { status: 'warning' });
+
+	const adm = projectResource(r, { fullMetadata: true }).metadata;
+	assert.deepEqual(adm, r.metadata, 'admins still see the derived fields');
+});
+
+// `catalog` and `managed` answer different questions and must not collapse
+// into each other: `managed` is inventory (nearly everything is managed),
+// `catalog` is presentation (a handful of rows are).
+test('catalog and managed are independent', () => {
+	const managedNotFeatured = { id: 'a', kind: 'host', metadata: { managed: true } };
+	const featured = { id: 'b', kind: 'service', metadata: { managed: true, catalog: true } };
+	assert.equal(projectResource(managedNotFeatured, {}).metadata.catalog, undefined);
+	assert.equal(projectResource(featured, {}).metadata.catalog, true);
 });

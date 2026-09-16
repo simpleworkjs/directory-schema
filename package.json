@@ -1,6 +1,6 @@
 {
   "name": "@simpleworkjs/directory-schema",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "The shared sso<->client directory contract: resource kinds, metadata convention keys, the { results } envelope, the security projection (strips secrets), and a thin discovery HTTP client. Consumed by sso-manager-node (projection + schema) and jump-host (client).",
   "main": "index.js",
   "scripts": {
