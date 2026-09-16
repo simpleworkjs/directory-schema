@@ -2,6 +2,46 @@
 
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-09-16
+
+The catalog at `/` becomes a curated launchpad instead of a render of the whole
+directory, and this is the half of it that lives in the contract.
+
+### Changed
+- **`status` is now public** (was admin-only). A status indicator on the
+  user-facing catalog was impossible while the only callers who never received
+  the field were the people the catalog exists for. The value is a four-state
+  enum (`ok`/`warning`/`critical`/`unknown`) about a resource the caller can
+  already reach, so it discloses nothing they could not learn by trying it.
+
+### Added
+- **`catalog`** (public) — an admin featured this resource on the launchpad.
+  Deliberately *not* `managed`: `managed` is an inventory statement and nearly
+  everything in a populated directory carries it (76 of 79 rows on the instance
+  this was designed against), while `catalog` is a presentation statement
+  covering a handful. It must be public, because the launchpad renders for
+  ordinary users — a non-admin who cannot see the field they are filtered on
+  gets either everything or nothing.
+- **HTTP endpoint shape** (public): `isHTTPS`, `externalIsHTTPS`, `healthPath`.
+  A catalog entry is an `http` service; internal (`isHTTPS`/`address`/`port`)
+  and external (`externalIsHTTPS`/`fqdn`/`externalPort`) are separate because a
+  service is commonly reachable both ways on different schemes and ports. Flat
+  rather than nested objects: the projection copies key by key and cannot walk
+  into an object, so a nested shape would pass through or drop wholesale.
+- **Derived status fields declared admin-only**: `status_message`,
+  `bubbled_status`, `bubbled_status_from`, `bubbled_environment`,
+  `bubbled_tags`, `environment`, `tags`. No behaviour change — they were
+  undeclared and therefore already dropped for non-admins. The split from
+  `status` is deliberate: `status_message` is prose written for an operator and
+  can name infrastructure the caller cannot reach, and `bubbled_*` summarises a
+  whole subtree, which would leak the state of descendants the projection is
+  hiding. A consumer wanting context walks to the nearest host and reads its
+  `status` instead.
+- Regression tests: every field a catalog card renders survives a non-admin
+  projection; `status` goes out while its derived fields do not; and `catalog`
+  and `managed` are held independent so they cannot quietly collapse into each
+  other.
+
 ## [1.2.0] — 2026-08-25
 
 The same failure as v1.1.0, one layer over: keys that consumers read, that the
